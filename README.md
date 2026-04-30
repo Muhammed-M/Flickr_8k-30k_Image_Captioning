@@ -44,13 +44,13 @@ Split: **80% train / 10% val / 10% test** (image-level, no leakage)
 
 ---
 
-## ⚙️ Architecture
+## ⚙️ Model Architecture
 
-![Model_Architecture](Outputs\model_architecture.svg)
+![Model Architecture](Outputs/model_architecture.svg)
 
 ---
 
-## 📊 Results
+## 📊 Test Results
 
 | Metric | Score |
 |--------|-------|
@@ -80,6 +80,6 @@ Split: **80% train / 10% val / 10% test** (image-level, no leakage)
 
 ## 🛠️ Tech Stack
 
-`PyTorch` · `TorchVision` · `EfficientNetB3` · `GloVe` · `Streamlit` · `NLTK` · `Pillow` · `KaggleHub`
+`PyTorch` · `TorchVision` · `EfficientNetB3` · `GloVe` · `Streamlit` · `NLTK` · `KaggleHub`
 
 ---
