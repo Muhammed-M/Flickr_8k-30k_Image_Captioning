@@ -6,6 +6,19 @@
 
 ---
 
+## ✨Live Demo 
+
+the Model App is deployed on a HuggingFace Space : 
+
+https://huggingface.co/spaces/Mohamed-M99/flickr-8k-30k-Image-Captioning-DPproject
+
+
+Upload an image and get an AI‑generated caption.
+
+
+
+---
+
 ## 📁 Project Structure
 
 ```
