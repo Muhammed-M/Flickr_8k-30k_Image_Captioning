@@ -74,6 +74,8 @@ Split: **80% train / 10% val / 10% test** (image-level, no leakage)
 | Training Epochs | **43** (early stop) |
 | Training Duration | **3.5 hours** |
 
+![trainingVSvalidation_curves](Outputs/attention_training_curves_v5.png)
+
 
 ---
 
