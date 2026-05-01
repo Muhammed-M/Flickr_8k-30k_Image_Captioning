@@ -1,8 +1,6 @@
-# 🖼️ Image Captioning with Deep Learning & PyTorch
+# Image Captioning with Deep Learning & PyTorch
 
 > Automatic image caption generation using **EfficientNetB3** + **Stacked LSTM** + **Bahdanau Attention**, trained on Flickr8k + Flickr30k.
-
-**BLEU-4: 0.2663 · BLEU-1: 0.6954 · Dataset: ~38K images · Epochs: 43**
 
 ---
 
@@ -95,6 +93,6 @@ Split: **80% train / 10% val / 10% test** (image-level, no leakage)
 
 ## 🛠️ Tech Stack
 
-`PyTorch` · `TorchVision` · `EfficientNetB3` · `GloVe` · `Streamlit` · `NLTK` · `KaggleHub`
+ `KaggleHub` · `NLTK` · `PyTorch` · `TorchVision` · `EfficientNetB3` · `GloVe` · `Streamlit` 
 
 ---
