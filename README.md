@@ -65,12 +65,12 @@ Split: **80% train / 10% val / 10% test** (image-level, no leakage)
 
 | Metric | Score |
 |--------|-------|
-| BLEU-1 | **0.6954** |
-| BLEU-2 | **0.5211** |
-| BLEU-3 | **0.3791** |
-| BLEU-4 | **0.2663** |
-| Training Epochs | **43** (early stop) |
-| Training Duration | **12 hours** |
+| BLEU-1 | **0.7050** |
+| BLEU-2 | **0.5352** |
+| BLEU-3 | **0.4024** |
+| BLEU-4 | **0.2965** |
+| Training Epochs | **65** (early stop) |
+| Training Duration | **4 hours** |
 
 ![trainingVSvalidation_curves](Outputs/attention_training_curves_v5.png)
 
