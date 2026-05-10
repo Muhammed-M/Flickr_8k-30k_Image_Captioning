@@ -573,41 +573,6 @@ def load_glove_embeddings(glove_path, word2idx, embed_dim):
 EMBED_DIM = 300
 embedding_matrix = load_glove_embeddings(GLOVE_FILE, word2idx, embed_dim=EMBED_DIM)
 
-print('\n' + '=' * 30)
-print("🔍 GLOVE MATRIX VALIDATION")
-
-# 1. Check a few specific vectors
-test_words = ['dog', 'cat', '<pad>', '<start>']
-
-for w in test_words:
-    if w in word2idx:
-        idx = word2idx[w]
-        vec = embedding_matrix[idx]
-        
-        # We only print the first 4 numbers of the 300 to keep the terminal clean
-        print(f"Word: {w:<8} | Index: {idx:<4} | First 4 dims: {vec[:4]} | Vector Norm: {np.linalg.norm(vec):.2f}")
-    else:
-        print(f"Word: '{w}' is not in your vocabulary.")
-
-# 2. Check Semantic Similarity (The ultimate proof)
-if 'dog' in word2idx and 'cat' in word2idx:
-    vec_dog = embedding_matrix[word2idx['dog']]
-    vec_cat = embedding_matrix[word2idx['cat']]
-    
-    # Calculate Cosine Similarity (1.0 means identical, 0.0 means unrelated)
-    cos_sim1 = np.dot(vec_dog, vec_cat) / (np.linalg.norm(vec_dog) * np.linalg.norm(vec_cat))
-    print(f"\n🧠 Semantic Test -> Cosine Similarity (dog vs cat): {cos_sim1:.4f}")
-
-if 'man' in word2idx and 'boy' in word2idx:
-    vec_man = embedding_matrix[word2idx['man']]
-    vec_boy = embedding_matrix[word2idx['boy']]
-    
-    # Calculate Cosine Similarity (1.0 means identical, 0.0 means unrelated)
-    cos_sim2 = np.dot(vec_man, vec_boy) / (np.linalg.norm(vec_man) * np.linalg.norm(vec_boy))
-    print(f"\n🧠 Semantic Test -> Cosine Similarity (man vs boy): {cos_sim2:.4f}")
-    
-print('=' * 30 + '\n')
-
 # 3. ── The PyTorch Translation ──
 # Convert the NumPy array to a PyTorch FloatTensor
 embedding_tensor = torch.FloatTensor(embedding_matrix)
@@ -1036,9 +1001,9 @@ print('=' * 50)
 
 
 
-======================================================================
-Evaluation
-======================================================================
+# ======================================================================
+# Evaluation
+# ======================================================================
 
 
 print('=' * 50)
