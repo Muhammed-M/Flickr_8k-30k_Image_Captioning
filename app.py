@@ -4,6 +4,7 @@ import pickle
 from PIL import Image
 import io
 import traceback
+import time
 
 # --- PyTorch Imports ---
 import torch
@@ -13,8 +14,8 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 
 # ---------------------------- CONFIG ----------------------------
-MAX_CAPTION_LEN = 30          # Updated to your PyTorch training length
-IMG_FEATURE_DIM = 1536        # EfficientNetB3 feature size
+MAX_CAPTION_LEN = 30          
+IMG_FEATURE_DIM = 1536        
 START_TOKEN = '<start>'   
 END_TOKEN   = '<end>'
 PAD_TOKEN   = '<pad>'
@@ -28,7 +29,23 @@ DEVICE = torch.device('cpu')  # Force CPU for Streamlit / Hugging Face free tier
 # ----------------------------------------------------------------
 
 # ---------- Model Architecture Classes ----------
-# PyTorch requires these to be defined in the script to load the weights
+
+# 1. The Fine-Tuned Encoder
+class CNNEncoder(nn.Module):
+    def __init__(self):
+        super(CNNEncoder, self).__init__()
+        base_model = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.DEFAULT)
+        self.extractor = base_model.features
+        
+        # We don't need freezing/unfreezing logic here because we are only doing inference
+        
+    def forward(self, images):
+        features = self.extractor(images)
+        # Reshape is handled directly inside the encoder now!
+        features = features.view(features.size(0), features.size(1), -1).permute(0, 2, 1)
+        return features
+
+# 2. Attention Layer
 class BahdanauAttention(nn.Module):
     def __init__(self, encoder_dim, decoder_dim, attention_dim):
         super(BahdanauAttention, self).__init__()
@@ -45,6 +62,7 @@ class BahdanauAttention(nn.Module):
         context_vector = torch.sum(context_vector, dim=1)
         return context_vector, attention_weights
 
+# 3. LSTM Decoder
 class ImageCaptioningModel(nn.Module):
     def __init__(self, vocab_size, embed_dim, encoder_dim, decoder_dim, attention_dim):
         super(ImageCaptioningModel, self).__init__()
@@ -55,7 +73,6 @@ class ImageCaptioningModel(nn.Module):
         self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
         self.attention = BahdanauAttention(encoder_dim, decoder_dim, attention_dim)
         
-        # Stacked LSTM Cells (Matches your trained .pth file)
         self.lstm_cell_1 = nn.LSTMCell(embed_dim + encoder_dim, decoder_dim, bias=True)
         self.lstm_cell_2 = nn.LSTMCell(decoder_dim, decoder_dim, bias=True)
         
@@ -67,7 +84,6 @@ class ImageCaptioningModel(nn.Module):
         seq_length = captions.size(1)
         embeddings = self.embedding(captions)
         
-        # Initialize hidden states for BOTH LSTMs
         h1 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
         c1 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
         h2 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
@@ -76,39 +92,30 @@ class ImageCaptioningModel(nn.Module):
         predictions = torch.zeros(batch_size, seq_length, self.vocab_size).to(features.device)
         
         for t in range(seq_length):
-            # Attention uses the hidden state of the SECOND LSTM
             context_vector, attention_weights = self.attention(features, h2)
-            
-            # Input for the first LSTM
             lstm_input = torch.cat([embeddings[:, t, :], context_vector], dim=1)
-            
-            # Pass through First LSTM
             h1, c1 = self.lstm_cell_1(lstm_input, (h1, c1))
-            
-            # Apply Dropout between LSTMs
             h1_drop = self.dropout(h1)
-            
-            # Pass through Second LSTM
             h2, c2 = self.lstm_cell_2(h1_drop, (h2, c2))
-            
-            # Final prediction using the second LSTM's output
             output = self.fc(self.dropout(h2))
             predictions[:, t, :] = output
             
         return predictions
 
-# ---------- Load pre-trained CNN for feature extraction ----------
-@st.cache_resource
-def load_feature_extractor():
-    base_model = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.DEFAULT)
-    extractor = base_model.features
-    extractor.to(DEVICE)
-    extractor.eval()
-    return extractor
+# ---------- Load Models & Weights ----------
 
-# ---------- Load captioning model and vocabularies ----------
+@st.cache_resource
+def load_feature_extractor(encoder_path):
+    """Loads the fine-tuned CNN Encoder."""
+    encoder = CNNEncoder()
+    encoder.load_state_dict(torch.load(encoder_path, map_location=DEVICE, weights_only=True))
+    encoder.to(DEVICE)
+    encoder.eval()
+    return encoder
+
 @st.cache_resource
 def load_captioning_model(model_path, word2idx_path, idx2word_path):
+    """Loads the vocabularies and the fine-tuned LSTM Decoder."""
     with open(word2idx_path, 'rb') as f:
         word2idx = pickle.load(f)
     with open(idx2word_path, 'rb') as f:
@@ -116,10 +123,7 @@ def load_captioning_model(model_path, word2idx_path, idx2word_path):
 
     vocab_size = len(word2idx)
     
-    # Instantiate the PyTorch model
     model = ImageCaptioningModel(vocab_size, EMBED_DIM, ENCODER_DIM, DECODER_DIM, ATTENTION_DIM)
-    
-    # Load the weights (map_location=DEVICE ensures it loads safely on CPU)
     model.load_state_dict(torch.load(model_path, map_location=DEVICE, weights_only=True))
     model.to(DEVICE)
     model.eval()
@@ -127,61 +131,81 @@ def load_captioning_model(model_path, word2idx_path, idx2word_path):
     return model, word2idx, idx2word
 
 # ---------- Image feature extraction ----------
-def extract_features(img, model):
-    # Matches PyTorch training pipeline
+def extract_features(img, encoder):
     transform = transforms.Compose([
         transforms.Resize((300, 300)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     
-    # Ensure image is RGB (drops alpha channel automatically)
     img = img.convert('RGB')
     img_tensor = transform(img).unsqueeze(0).to(DEVICE)
     
     with torch.no_grad():
-        feats = model(img_tensor)
-        # Reshape to match (1, 100, 1536) sequence format
-        feats = feats.view(feats.size(0), feats.size(1), -1).permute(0, 2, 1)
+        # Notice we don't reshape here anymore! The CNNEncoder does it.
+        feats = encoder(img_tensor)
         
     return feats
 
-# ---------- Caption generation (greedy search) ----------
-def generate_caption(model, image_features, word2idx, idx2word, max_length):
+# ---------- Caption generation (Beam Search) ----------
+def generate_caption_beam(model, image_features, word2idx, idx2word, max_length, beam_width=5):
     """
-    Greedy decoding: Translated directly from your TF code.
-    Starts with '<start>' and predicts the next word step-by-step.
+    Beam Search decoding: Keeps track of top 'k' most probable sequences.
     """
     start_idx = word2idx[START_TOKEN]
     end_idx = word2idx[END_TOKEN]
     pad_idx = word2idx.get(PAD_TOKEN, 0)
     
-    input_seq = [start_idx]
-    caption = []
+    # Initial beam: list of tuples (sequence_of_indices, cumulative_log_prob)
+    sequences = [([start_idx], 0.0)]
 
     with torch.no_grad():
-        for i in range(max_length):
-            # Pad the current sequence to max_length
-            padded = input_seq + [pad_idx] * (max_length - len(input_seq))
-            seq_tensor = torch.tensor([padded], dtype=torch.long).to(DEVICE)
+        for step in range(max_length):
+            all_candidates = []
             
-            # Predict next word distribution
-            outputs = model(image_features, seq_tensor)
-            
-            # Get the prediction for the NEXT word
-            next_word_pos = len(input_seq) - 1
-            next_word_logits = outputs[0, next_word_pos, :]
-            
-            # Get index of highest probability (Greedy Search)
-            next_idx = torch.argmax(next_word_logits).item()
-            
-            if next_idx == end_idx:
-                break
-            if next_idx != start_idx and next_idx != pad_idx:
-                caption.append(idx2word[next_idx])
+            for seq, score in sequences:
+                # If sequence already ended, keep it in the candidates
+                if seq[-1] == end_idx:
+                    all_candidates.append((seq, score))
+                    continue
                 
-            input_seq.append(next_idx)
+                # Pad the current sequence to MAX_LEN for the model
+                padded_seq = seq + [pad_idx] * (max_length - len(seq))
+                seq_tensor = torch.tensor([padded_seq], dtype=torch.long).to(DEVICE)
+                
+                # Forward pass
+                outputs = model(image_features, seq_tensor)
+                
+                # Get prediction for the NEXT word
+                next_word_pos = len(seq) - 1
+                next_word_logits = outputs[0, next_word_pos, :]
+                
+                # Convert raw logits to probabilities
+                preds = F.softmax(next_word_logits, dim=-1).cpu().numpy()
+                
+                # Take top `beam_width` tokens
+                top_indices = np.argsort(preds)[-beam_width:]
+                
+                for idx in top_indices:
+                    new_seq = seq + [int(idx)]
+                    # Add log probability to cumulative score (using 1e-7 to avoid log(0))
+                    new_score = score + np.log(preds[idx] + 1e-7)
+                    all_candidates.append((new_seq, new_score))
+                    
+            # Sort all candidates by score and keep the best `beam_width` sequences
+            sequences = sorted(all_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
+            
+            # If all sequences in our top beam have ended, stop early
+            if all([s[0][-1] == end_idx for s in sequences]):
+                break
 
+    # Select the absolute best sequence from our final beams
+    best_seq, _ = sequences[0]
+    
+    # Convert indices to words, removing special tokens
+    caption = [idx2word[idx] for idx in best_seq 
+             if idx not in (pad_idx, start_idx, end_idx)]
+             
     return ' '.join(caption)
 
 # ---------- Streamlit UI ----------
@@ -190,14 +214,15 @@ def main():
     st.title("🖼️ Image Caption Generator")
     st.write("Upload an image and get an AI‑generated caption.")
 
-    # Paths to your PyTorch artifacts
-    MODEL_PATH = "best_model.pth"   # Changed from .keras to .pth
-    WORD2IDX_PATH = "word2idx.pkl"
-    IDX2WORD_PATH = "idx2word.pkl"
+    # 4 Files Required Now!
+    ENCODER_PATH  = "best_encoder_V5.pth"
+    MODEL_PATH    = "best_model_V5.pth"   
+    WORD2IDX_PATH = "word2idx_V5.pkl"
+    IDX2WORD_PATH = "idx2word_V5.pkl"
 
-    # Load everything once
     with st.spinner("Loading models... (this may take a moment on first run)"):
-        feature_extractor = load_feature_extractor()
+        # Pass the encoder path to the extractor
+        feature_extractor = load_feature_extractor(ENCODER_PATH)
         caption_model, word2idx, idx2word = load_captioning_model(
             MODEL_PATH, WORD2IDX_PATH, IDX2WORD_PATH
         )
@@ -205,22 +230,45 @@ def main():
 
     # File uploader
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-    if uploaded_file is not None:
+    
+    
+    
 
+    if uploaded_file is not None:
         try :
-            # Display the image
             image = Image.open(uploaded_file).convert("RGB")
             st.image(image, caption="Uploaded Image", use_container_width=True)
 
+            # Add a slider for Beam Width (Defaults to 3, max 10)
+            beam_width = st.slider("Beam Width", min_value=1, max_value=10, value=3)
+
             if st.button("Generate Caption"):
-                with st.spinner("Generating..."):
+                with st.spinner(f"Generating with Beam Search (Width: {beam_width})..."):
                     # Extract features
                     features = extract_features(image, feature_extractor)
-                    # Generate caption
-                    caption = generate_caption(
-                        caption_model, features, word2idx, idx2word, MAX_CAPTION_LEN
+                    
+                    # Generate caption using the NEW Beam Search function
+                    caption = generate_caption_beam(
+                        caption_model, features, word2idx, idx2word, MAX_CAPTION_LEN, beam_width=beam_width
                     )
-                st.markdown(f"### 📝 Caption: **{caption.capitalize()}**")
+                    
+                # --- TYPEWRITER EFFECT ---
+                # 1. Create an empty container on the screen
+                placeholder = st.empty()
+                displayed_text = "### 📝 Caption: "
+                
+                # 2. Split the generated caption into individual words
+                words = caption.capitalize().split()
+                
+                # 3. Loop through the words and update the container
+                for word in words:
+                    displayed_text += word + " "
+                    # The '▌' character adds a cool blinking terminal cursor effect!
+                    placeholder.markdown(displayed_text + "▌") 
+                    time.sleep(0.15)  # Delay 0.15 seconds between words
+                
+                # 4. Print the final version to remove the cursor block
+                placeholder.markdown(displayed_text + "")
 
         except Exception as e:
             st.error(f"Upload error:\n\n```\n{e}\n```")
