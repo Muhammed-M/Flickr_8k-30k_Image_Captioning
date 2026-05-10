@@ -23,7 +23,7 @@ PAD_TOKEN   = '<pad>'
 # PyTorch Architecture Dimensions
 EMBED_DIM = 300
 ENCODER_DIM = 1536
-DECODER_DIM = 512
+DECODER_DIM = 1024
 ATTENTION_DIM = 256
 DEVICE = torch.device('cpu')  # Force CPU for Streamlit / Hugging Face free tier
 # ----------------------------------------------------------------
@@ -63,43 +63,53 @@ class BahdanauAttention(nn.Module):
         return context_vector, attention_weights
 
 # 3. LSTM Decoder
+
 class ImageCaptioningModel(nn.Module):
-    def __init__(self, vocab_size, embed_dim, encoder_dim, decoder_dim, attention_dim):
+
+    def __init__(self, vocab_size, embed_dim, encoder_dim, decoder_dim, attention_dim, padidx, embedding_tensor=None ):
         super(ImageCaptioningModel, self).__init__()
+
         self.vocab_size = vocab_size
         self.encoder_dim = encoder_dim
         self.decoder_dim = decoder_dim
-        
-        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        if embedding_tensor is not None:
+            self.embedding = nn.Embedding.from_pretrained(embedding_tensor, freeze=False, padding_idx=padidx)
+            print(f"Embedding Trainable Parameters: {self.embedding.weight.requires_grad}") 
+        else:
+            self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=padidx)
         self.attention = BahdanauAttention(encoder_dim, decoder_dim, attention_dim)
-        
         self.lstm_cell_1 = nn.LSTMCell(embed_dim + encoder_dim, decoder_dim, bias=True)
         self.lstm_cell_2 = nn.LSTMCell(decoder_dim, decoder_dim, bias=True)
-        
+        self.init_h1 = nn.Linear(encoder_dim, decoder_dim)
+        self.init_c1 = nn.Linear(encoder_dim, decoder_dim)
+        self.init_h2 = nn.Linear(encoder_dim, decoder_dim)
+        self.init_c2 = nn.Linear(encoder_dim, decoder_dim)
+        self.dropout_lstm = nn.Dropout(0.5)  
+        self.dropout_out  = nn.Dropout(0.5)  
         self.fc = nn.Linear(decoder_dim, vocab_size)
-        self.dropout = nn.Dropout(0.5)
 
     def forward(self, features, captions):
         batch_size = features.size(0)
         seq_length = captions.size(1)
         embeddings = self.embedding(captions)
-        
-        h1 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
-        c1 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
-        h2 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
-        c2 = torch.zeros((batch_size, self.decoder_dim)).to(features.device)
-        
+        mean_encoder_out = features.mean(dim=1)
+        h1 = self.init_h1(mean_encoder_out)
+        c1 = self.init_c1(mean_encoder_out)
+        h2 = self.init_h2(mean_encoder_out)
+        c2 = self.init_c2(mean_encoder_out)
         predictions = torch.zeros(batch_size, seq_length, self.vocab_size).to(features.device)
-        
+
+        # ── The Time-Step Loop ──
         for t in range(seq_length):
             context_vector, attention_weights = self.attention(features, h2)
             lstm_input = torch.cat([embeddings[:, t, :], context_vector], dim=1)
             h1, c1 = self.lstm_cell_1(lstm_input, (h1, c1))
-            h1_drop = self.dropout(h1)
+            h1_drop = self.dropout_lstm(h1)
             h2, c2 = self.lstm_cell_2(h1_drop, (h2, c2))
-            output = self.fc(self.dropout(h2))
+            output = self.fc(self.dropout_out(h2))
+
             predictions[:, t, :] = output
-            
+
         return predictions
 
 # ---------- Load Models & Weights ----------
@@ -123,7 +133,15 @@ def load_captioning_model(model_path, word2idx_path, idx2word_path):
 
     vocab_size = len(word2idx)
     
-    model = ImageCaptioningModel(vocab_size, EMBED_DIM, ENCODER_DIM, DECODER_DIM, ATTENTION_DIM)
+    # Fix
+    model = ImageCaptioningModel(
+        vocab_size=vocab_size,
+        embed_dim=EMBED_DIM,
+        encoder_dim=ENCODER_DIM,
+        decoder_dim=DECODER_DIM,
+        attention_dim=ATTENTION_DIM,
+        padidx=word2idx['<pad>']
+    )
     model.load_state_dict(torch.load(model_path, map_location=DEVICE, weights_only=True))
     model.to(DEVICE)
     model.eval()
@@ -181,15 +199,14 @@ def generate_caption_beam(model, image_features, word2idx, idx2word, max_length,
                 next_word_logits = outputs[0, next_word_pos, :]
                 
                 # Convert raw logits to probabilities
-                preds = F.softmax(next_word_logits, dim=-1).cpu().numpy()
+                preds = F.softmax(next_word_logits, dim=-1)
+                top_probs, top_indices = torch.topk(preds, beam_width)
+                top_probs   = top_probs.cpu().numpy()
+                top_indices = top_indices.cpu().numpy()
                 
-                # Take top `beam_width` tokens
-                top_indices = np.argsort(preds)[-beam_width:]
-                
-                for idx in top_indices:
-                    new_seq = seq + [int(idx)]
-                    # Add log probability to cumulative score (using 1e-7 to avoid log(0))
-                    new_score = score + np.log(preds[idx] + 1e-7)
+                for prob, idx in zip(top_probs, top_indices):
+                    new_seq   = seq + [int(idx)]
+                    new_score = score + np.log(prob + 1e-7)
                     all_candidates.append((new_seq, new_score))
                     
             # Sort all candidates by score and keep the best `beam_width` sequences
@@ -215,10 +232,10 @@ def main():
     st.write("Upload an image and get an AI‑generated caption.")
 
     # 4 Files Required Now!
-    ENCODER_PATH  = "best_encoder_V5.pth"
-    MODEL_PATH    = "best_model_V5.pth"   
-    WORD2IDX_PATH = "word2idx_V5.pkl"
-    IDX2WORD_PATH = "idx2word_V5.pkl"
+    ENCODER_PATH  = "best_encoder_V7.pth"
+    MODEL_PATH    = "best_model_V7.pth"   
+    WORD2IDX_PATH = "word2idx_V7.pkl"
+    IDX2WORD_PATH = "idx2word_V7.pkl"
 
     with st.spinner("Loading models... (this may take a moment on first run)"):
         # Pass the encoder path to the extractor
